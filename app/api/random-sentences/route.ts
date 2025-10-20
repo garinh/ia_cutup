@@ -35,6 +35,18 @@ function extractSentences(text: string): string[] {
     "chapter",
     "table of contents",
     "index",
+    "css",
+    "html",
+    "style",
+    "display",
+    "margin",
+    "padding",
+    "border",
+    "webkit",
+    "mozilla",
+    "shadow dom",
+    "shady dom",
+    "web component",
   ]
 
   // Clean the text more aggressively for OCR artifacts
@@ -60,6 +72,13 @@ function extractSentences(text: string): string[] {
 
       if (hasExcludedKeyword) return false
 
+      // Filter out CSS/HTML formatting patterns
+      if (s.match(/\.(media|button|label|web|menu|nav|header|footer|container|wrapper)\s+(button|label|display|none|flex|grid|style)/i)) return false
+      if (s.match(/\d+px|\d+em|\d+rem|rgba?\(|#[0-9a-fA-F]{3,6}/)) return false
+      if (s.match(/\{[\s\S]*\}/)) return false // Contains curly braces (likely CSS)
+      if (s.match(/display\s+(none|block|flex|grid|inline)/i)) return false
+      if (s.includes('.') && s.split('.').length > 5) return false // Too many dots (likely CSS classes chained)
+      
       // Ensure sentence has some alphabetic content and isn't just numbers/symbols
       const hasLetters = /[a-zA-Z]{3,}/.test(s)
       
@@ -97,6 +116,26 @@ function filterMainContent(text: string): string {
 
   // Split text into lines
   const lines = text.split("\n")
+    .filter((line) => {
+      const trimmed = line.trim()
+      
+      // Filter out CSS and HTML formatting lines
+      if (trimmed.match(/^(\.|\#)[a-zA-Z0-9_\-]+(\s+\{|\s+[a-zA-Z0-9_\-]+\s*\{|$)/)) return false // CSS selectors
+      if (trimmed.match(/^\.([\w\-]+\s*)+(\{|\:|$)/)) return false // CSS class definitions
+      if (trimmed.match(/^(display|margin|padding|border|background|color|font|width|height|position|flex|grid)/i)) return false // CSS properties
+      if (trimmed.match(/^(button|label|div|span|style|class|id)\s*(\.|\#|\{|\:)/i)) return false // HTML/CSS mixed
+      if (trimmed.match(/^<[^>]+>|<\/[^>]+>$/)) return false // HTML tags
+      if (trimmed.match(/^\{[\s\S]*\}$/)) return false // Curly brace blocks (CSS)
+      if (trimmed.match(/^(Shady DOM|Shadow DOM|Web Component)/i)) return false // Web component mentions
+      if (trimmed.match(/^(style|styles)\s+(for|in|of)\s+/i)) return false // Style references
+      if (trimmed.includes('webkit') || trimmed.includes('mozilla') || trimmed.includes('moz-')) return false // Browser prefixes
+      if (trimmed.match(/^(true|false|null|undefined|var|let|const|function)\s*[\{\(\=\;]/)) return false // JavaScript code
+      if (trimmed.match(/\:\s*\d+px|\:\s*#[0-9a-fA-F]{3,6}|\:\s*rgba?\(/)) return false // CSS values
+      if (trimmed.match(/^[\{\}\[\]\(\)\;]+$/)) return false // Just brackets/punctuation
+      if (trimmed.match(/^\d+\s*\{/)) return false // Line numbers with brackets
+      
+      return true
+    })
 
   // Find where the main content likely starts (after licenses and front matter)
   // Look for the first substantial paragraph after skipping the first 15% of the document
@@ -120,33 +159,44 @@ export async function GET() {
     const searchResponse = await fetch(searchUrl)
     const searchData: SearchResponse = await searchResponse.json()
 
-    // Filter books that have Internet Archive IDs
+    // Filter books that have Internet Archive IDs and are in English
     const booksWithIA = searchData.docs.filter((book) => {
       // Must have Internet Archive ID
       if (!book.ia || book.ia.length === 0) return false
       
-      // If language is specified, prefer English but don't exclude others yet
-      // We'll do more thorough checking when we fetch the actual text
-      if (book.language && book.language.length > 0) {
-        const hasEnglish = book.language.some(lang => 
-          lang.toLowerCase().includes('eng') || 
-          lang.toLowerCase().includes('english') ||
-          lang.toLowerCase() === 'en'
-        )
-        // If it explicitly has a non-English language, skip it
-        if (!hasEnglish && book.language.some(lang => 
-          lang.toLowerCase().includes('rus') || 
-          lang.toLowerCase().includes('russian') ||
-          lang.toLowerCase().includes('ger') ||
-          lang.toLowerCase().includes('german') ||
-          lang.toLowerCase().includes('fre') ||
-          lang.toLowerCase().includes('french') ||
-          lang.toLowerCase().includes('spa') ||
-          lang.toLowerCase().includes('spanish')
-        )) {
-          return false
-        }
-      }
+      // STRICT: Only include books that explicitly list English as a language
+      // If no language metadata, skip it (to be safe)
+      if (!book.language || book.language.length === 0) return false
+      
+      // Check if English is explicitly listed
+      const hasEnglish = book.language.some(lang => {
+        const lowerLang = lang.toLowerCase()
+        return lowerLang === 'eng' || 
+               lowerLang === 'en' || 
+               lowerLang === 'english' ||
+               lowerLang.includes('eng')
+      })
+      
+      if (!hasEnglish) return false
+      
+      // Also check for common non-English languages and exclude if found
+      const hasNonEnglish = book.language.some(lang => {
+        const lowerLang = lang.toLowerCase()
+        return lowerLang.includes('rus') || lowerLang.includes('russian') ||
+               lowerLang.includes('ger') || lowerLang.includes('german') ||
+               lowerLang.includes('fre') || lowerLang.includes('french') ||
+               lowerLang.includes('spa') || lowerLang.includes('spanish') ||
+               lowerLang.includes('ita') || lowerLang.includes('italian') ||
+               lowerLang.includes('por') || lowerLang.includes('portuguese') ||
+               lowerLang.includes('dut') || lowerLang.includes('dutch') ||
+               lowerLang.includes('pol') || lowerLang.includes('polish') ||
+               lowerLang.includes('chi') || lowerLang.includes('chinese') ||
+               lowerLang.includes('jap') || lowerLang.includes('japanese') ||
+               lowerLang.includes('ara') || lowerLang.includes('arabic') ||
+               lowerLang.includes('lat') || lowerLang.includes('latin')
+      })
+      
+      if (hasNonEnglish) return false
       
       return true
     })
@@ -214,8 +264,13 @@ export async function GET() {
         bookDetail.textLength = fullText.length
 
         // Additional English language check on the actual text content
-        // First, clean the text to remove common OCR artifacts and metadata
-        const cleanedText = fullText
+        // Take a sample from the middle of the book (skip front matter)
+        const sampleStart = Math.floor(fullText.length * 0.2)
+        const sampleEnd = Math.floor(fullText.length * 0.3)
+        const sampleText = fullText.slice(sampleStart, sampleEnd)
+        
+        // Clean the sample text to remove common OCR artifacts and metadata
+        const cleanedText = sampleText
           .replace(/\d+/g, '') // Remove numbers
           .replace(/[^\w\s]/g, ' ') // Replace punctuation with spaces
           .replace(/\s+/g, ' ') // Normalize whitespace
@@ -228,10 +283,25 @@ export async function GET() {
         if (totalCharCount > 100) {
           const englishRatio = englishCharCount / totalCharCount
           
-          // If less than 30% English characters in the cleaned text, skip this book
-          // This is much more lenient since OCR text often has many artifacts
-          if (englishRatio < 0.3) {
-            console.log(`[v0] Skipping ${book.title} - text appears to be non-English (${Math.round(englishRatio * 100)}% English chars)`)
+          // Stricter check: If less than 60% English characters in the cleaned text, skip this book
+          if (englishRatio < 0.6) {
+            console.log(`[v0] Skipping ${book.title} - text appears to be non-English (${Math.round(englishRatio * 100)}% English chars in sample)`)
+            searchMetadata.booksFailed++
+            bookDetail.status = 'no_sentences'
+            searchMetadata.bookDetails.push(bookDetail)
+            continue
+          }
+          
+          // Additional check: Look for common English words
+          const commonEnglishWords = ['the', 'and', 'is', 'in', 'to', 'of', 'a', 'that', 'it', 'was', 'for', 'on', 'with', 'as', 'be']
+          const lowerSample = cleanedText.toLowerCase()
+          const englishWordCount = commonEnglishWords.filter(word => 
+            lowerSample.includes(` ${word} `)
+          ).length
+          
+          // Should have at least 5 of these common English words
+          if (englishWordCount < 5) {
+            console.log(`[v0] Skipping ${book.title} - lacks common English words (found ${englishWordCount}/15)`)
             searchMetadata.booksFailed++
             bookDetail.status = 'no_sentences'
             searchMetadata.bookDetails.push(bookDetail)
