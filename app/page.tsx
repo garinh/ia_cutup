@@ -5,9 +5,32 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { BookOpen, Loader2, RefreshCw } from "lucide-react"
 import { SentenceDisplay } from "@/components/sentence-display"
+import { SearchInfo } from "@/components/search-info"
+
+interface SearchMetadata {
+  subject: string
+  totalBooksAvailable: number
+  totalBooksFound: number
+  booksWithInternetArchive: number
+  booksSelected: number
+  booksProcessed: number
+  booksSuccessful: number
+  booksFailed: number
+  totalSentencesExtracted: number
+  bookDetails: Array<{
+    title: string
+    author: string
+    iaId: string
+    status: 'success' | 'failed' | 'no_sentences'
+    sentencesFound: number
+    textLength?: number
+    positionInBook?: string
+  }>
+}
 
 export default function Home() {
   const [sentences, setSentences] = useState<Array<{ text: string; book: string; author: string }>>([])
+  const [searchMetadata, setSearchMetadata] = useState<SearchMetadata | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -15,6 +38,7 @@ export default function Home() {
     setLoading(true)
     setError(null)
     setSentences([])
+    setSearchMetadata(null)
 
     try {
       const response = await fetch("/api/random-sentences")
@@ -25,6 +49,7 @@ export default function Home() {
       }
 
       setSentences(data.sentences)
+      setSearchMetadata(data.searchMetadata)
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred")
     } finally {
@@ -67,6 +92,8 @@ export default function Home() {
             <p className="text-destructive text-center">{error}</p>
           </Card>
         )}
+
+        {searchMetadata && <SearchInfo searchMetadata={searchMetadata} />}
 
         {sentences.length > 0 && <SentenceDisplay sentences={sentences} />}
 
